@@ -1,4 +1,5 @@
-#include <pthread.h>
+#include <thread>
+#include <memory>
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -6,10 +7,15 @@
 #include <chrono>
 #include <algorithm>
 #include <queue>
+#include <semaphore>
+#include <optional>
 #include "libarff/arff_parser.h"
 #include "libarff/arff_data.h"
 
 using namespace std;
+
+// semaphore to limit the working thread number 
+optional<counting_semaphore<>> semaphore;
 
 // Calculates the distance between two instances
 float distance(const float *instance_A, const float *instance_B, int num_attributes)
@@ -39,6 +45,59 @@ struct CandidateComparator
     }
 };
 
+void find_knn(
+    int queryIndex,
+    int train_num_instances,
+    int k,
+    int num_classes,
+    int num_attributes,
+    float *train_matrix,
+    float *test_matrix,
+    shared_ptr<int> prediction)
+{
+    // limit number of working thread
+    semaphore->acquire();
+    // Priority queue to store the k nearest neighbors (max-heap based on distance)
+    priority_queue<Candidate, vector<Candidate>, CandidateComparator> candidates;
+    vector<int> classCounts(num_classes, 0);
+    for (int keyIndex = 0; keyIndex < train_num_instances; ++keyIndex)
+    {
+        float dist = distance(
+            &test_matrix[queryIndex * num_attributes],
+            &train_matrix[keyIndex * num_attributes],
+            num_attributes);
+
+        int class_label = (int)(train_matrix[keyIndex * num_attributes + num_attributes - 1]);
+
+        Candidate candidate{dist, class_label};
+
+        if ((int)(candidates.size()) < k)
+        {
+            candidates.push(candidate);
+        }
+        else if (dist < candidates.top().distance)
+        {
+            candidates.pop();
+            candidates.push(candidate);
+        }
+    }
+
+    // Collect class labels from the k nearest neighbors
+    while (!candidates.empty())
+    {
+        const Candidate &c = candidates.top();
+        classCounts[c.class_label]++;
+        candidates.pop();
+    }
+
+    // Determine the class with the highest vote
+    int max_class = distance(classCounts.begin(),
+                             max_element(classCounts.begin(), classCounts.end()));
+
+    *prediction = max_class;
+    semaphore->release();
+}
+
 // Implements a threaded kNN where for each candidate query an in-place priority queue is maintained to identify the nearest neighbors
 vector<int> KNN(ArffData *train, ArffData *test, int k, int num_thread)
 {
@@ -47,59 +106,39 @@ vector<int> KNN(ArffData *train, ArffData *test, int k, int num_thread)
     int train_num_instances = train->num_instances();
     int test_num_instances = test->num_instances();
 
-    vector<int> predictions(test_num_instances);
+    vector<shared_ptr<int>> predictions_ptr(test_num_instances);
 
     float *train_matrix = train->get_dataset_matrix();
     float *test_matrix = test->get_dataset_matrix();
 
-    vector<int> classCounts(num_classes, 0);
+    vector<thread> threads;
 
+    // put the outer loop to child threads
     for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex)
     {
-        // Priority queue to store the k nearest neighbors (max-heap based on distance)
-        priority_queue<Candidate, vector<Candidate>, CandidateComparator> candidates;
-
-        for (int keyIndex = 0; keyIndex < train_num_instances; ++keyIndex)
-        {
-            float dist = distance(&test_matrix[queryIndex * num_attributes],
-                                  &train_matrix[keyIndex * num_attributes],
-                                  num_attributes);
-
-            int class_label = static_cast<int>(
-                train_matrix[keyIndex * num_attributes + num_attributes - 1]);
-
-            Candidate candidate{dist, class_label};
-
-            if (static_cast<int>(candidates.size()) < k)
-            {
-                // If the heap is not full, push the new candidate
-                candidates.push(candidate);
-            }
-            else if (dist < candidates.top().distance)
-            {
-                // If the new candidate is closer than the farthest in the heap
-                candidates.pop();
-                candidates.push(candidate);
-            }
-        }
-
-        // Collect class labels from the k nearest neighbors
-        while (!candidates.empty())
-        {
-            const Candidate &c = candidates.top();
-            classCounts[c.class_label]++;
-            candidates.pop();
-        }
-
-        // Determine the class with the highest vote
-        int max_class = distance(classCounts.begin(),
-                                 max_element(classCounts.begin(), classCounts.end()));
-
-        predictions[queryIndex] = max_class;
-
-        // Reset class counts
-        fill(classCounts.begin(), classCounts.end(), 0);
+        predictions_ptr[queryIndex] = make_shared<int>();
+        threads.emplace_back(
+            find_knn,
+            queryIndex,
+            train_num_instances,
+            k,
+            num_classes,
+            num_attributes,
+            train_matrix,
+            test_matrix,
+            predictions_ptr[queryIndex]);
     }
+    for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex)
+    {
+        threads[queryIndex].join();
+    }
+
+    vector<int> predictions(test_num_instances);
+    for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex)
+    {
+        predictions[queryIndex] = *predictions_ptr[queryIndex];
+    }
+
     return predictions;
 }
 
@@ -144,6 +183,9 @@ int main(int argc, char *argv[])
     // k value for the k-nearest neighbors
     int k = stoi(argv[3]);
     int num_threads = stoi(argv[4]);
+
+    // instantiate the semaphore
+    semaphore.emplace(num_threads);
 
     // Open the datasets
     ArffParser parserTrain(argv[1]);
