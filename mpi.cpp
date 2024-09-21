@@ -5,23 +5,47 @@
 #include "libarff/arff_data.h"
 #include "mpi.h"
 
+using namespace std;
+
 // Calculates the distance between two instances
-float distance(float* instance_A, float* instance_B, int num_attributes) {
-    float sum = 0;
-    
-    for (int i = 0; i < num_attributes-1; i++) {
+float distance(const float* instance_A, const float* instance_B, int num_attributes)
+{
+    float sum = 0.0f;
+    for (int i = 0; i < num_attributes - 1; ++i)
+    { // Exclude the class label
         float diff = instance_A[i] - instance_B[i];
-        sum += diff*diff;
+        sum += diff * diff;
     }
-    
     return sqrt(sum);
 }
 
+// Candidate neighbor structure
+struct Candidate
+{
+    float distance;
+    int class_label;
+};
+
+// Comparator for the priority queue (max-heap)
+struct CandidateComparator
+{
+    bool operator()(const Candidate& lhs, const Candidate& rhs) const
+    {
+        return lhs.distance < rhs.distance;
+    }
+};
+
 // Implements a MPI kNN where for each candidate query an in-place priority queue is maintained to identify the nearest neighbors
-int* KNN(ArffData* train, ArffData* test, int k, int mpi_rank, int mpi_num_processes) {
-    
-    int* predictions = (int*)calloc(test->num_instances(), sizeof(int));
-    
+vector<int> KNN(ArffData* train, ArffData* test, int k, int mpi_rank, int mpi_num_processes)
+{
+
+    int num_classes = train->num_classes();
+    int num_attributes = train->num_attributes();
+    int train_num_instances = train->num_instances();
+    int test_num_instances = test->num_instances();
+
+    vector<int> predictions(test_num_instances);
+
     /*************************************************************
     *** Complete this code and return the array of predictions ***
     **************************************************************/
@@ -29,78 +53,83 @@ int* KNN(ArffData* train, ArffData* test, int k, int mpi_rank, int mpi_num_proce
     return predictions;
 }
 
-int* computeConfusionMatrix(int* predictions, ArffData* dataset)
+
+vector<int> computeConfusionMatrix(const vector<int>& predictions, ArffData* dataset)
 {
-    int* confusionMatrix = (int*)calloc(dataset->num_classes() * dataset->num_classes(), sizeof(int)); // matrix size numberClasses x numberClasses
-    
-    for(int i = 0; i < dataset->num_instances(); i++) { // for each instance compare the true class and predicted class    
-        int trueClass = dataset->get_instance(i)->get(dataset->num_attributes() - 1)->operator int32();
+    int num_classes = dataset->num_classes();
+    int num_instances = dataset->num_instances();
+    vector<int> confusionMatrix(num_classes * num_classes, 0);
+
+    for (int i = 0; i < num_instances; ++i)
+    {
+        int trueClass = static_cast<int>(
+            dataset->get_instance(i)->get(dataset->num_attributes() - 1)->operator float());
         int predictedClass = predictions[i];
-        
-        confusionMatrix[trueClass*dataset->num_classes() + predictedClass]++;
+        confusionMatrix[trueClass * num_classes + predictedClass]++;
     }
-    
+
     return confusionMatrix;
 }
 
-float computeAccuracy(int* confusionMatrix, ArffData* dataset)
+float computeAccuracy(const vector<int>& confusionMatrix, ArffData* dataset)
 {
+    int num_classes = dataset->num_classes();
     int successfulPredictions = 0;
-    
-    for(int i = 0; i < dataset->num_classes(); i++) {
-        successfulPredictions += confusionMatrix[i*dataset->num_classes() + i]; // elements in the diagonal are correct predictions
+
+    for (int i = 0; i < num_classes; ++i)
+    {
+        successfulPredictions += confusionMatrix[i * num_classes + i];
     }
-    
-    return 100 * successfulPredictions / (float) dataset->num_instances();
+
+    return 100.0f * successfulPredictions / dataset->num_instances();
 }
 
-int main(int argc, char *argv[])
+
+int main(int argc, char* argv[])
 {
-    if(argc != 4)
+    if (argc != 4)
     {
-        printf("Usage: ./program datasets/train.arff datasets/test.arff k");
-        exit(0);
+        cerr << "Usage: ./program datasets/train.arff datasets/test.arff k num_threads" << endl;
+        return 1;
     }
 
     // k value for the k-nearest neighbors
-    int k = strtol(argv[3], NULL, 10);
+    int k = stoi(argv[3]);
 
     int mpi_rank, mpi_num_processes;
-    MPI_Init(&argc,&argv);
-    MPI_Comm_rank (MPI_COMM_WORLD, &mpi_rank);
-    MPI_Comm_size (MPI_COMM_WORLD, &mpi_num_processes);
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_num_processes);
 
     // Open the datasets
     ArffParser parserTrain(argv[1]);
     ArffParser parserTest(argv[2]);
-    ArffData *train = parserTrain.parse();
-    ArffData *test = parserTest.parse();
-    
-    struct timespec start, end;
-    int* predictions = NULL;
-    
+    ArffData* train = parserTrain.parse();
+    ArffData* test = parserTest.parse();
+
     // Initialize time measurement
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    
-    predictions = KNN(train, test, k, mpi_rank, mpi_num_processes);
-    
+    auto start = chrono::steady_clock::now();
+
+    vector<int> predictions = KNN(train, test, k, mpi_rank, mpi_num_processes);
+
     // Stop time measurement
-    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    auto end = chrono::steady_clock::now();
 
     if (mpi_rank == 0) {
         // Compute the confusion matrix
-        int* confusionMatrix = computeConfusionMatrix(predictions, test);
+        vector<int> confusionMatrix = computeConfusionMatrix(predictions, test);
         // Calculate the accuracy
         float accuracy = computeAccuracy(confusionMatrix, test);
 
-        uint64_t time_difference = (1000000000L * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec) / 1e6;
+        chrono::duration<double, milli> time_difference = end - start;
 
-        printf("The %i-NN classifier for %lu test instances and %lu train instances required %llu ms CPU time for MPI with %d processes. Accuracy was %.2f\%\n", k, test->num_instances(), train->num_instances(), (long long unsigned int) time_difference, accuracy, mpi_num_processes);
-
-        free(confusionMatrix);
+        cout << "The " << k << "-NN classifier for " << test->num_instances()
+            << " test instances and " << train->num_instances()
+            << " train instances required " << time_difference.count()
+            << " ms CPU time for MPI with " << mpi_num_processes
+            << " processes Accuracy was " << accuracy << "%" << endl;
     }
 
-    free(predictions);
 
     MPI_Finalize();
 }
