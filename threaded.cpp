@@ -176,8 +176,8 @@ int main(int argc, char *argv[])
 {
     if (argc != 5)
     {
-        printf("Usage: ./program datasets/train.arff datasets/test.arff k num_threads");
-        exit(0);
+        cerr << "Usage: ./program datasets/train.arff datasets/test.arff k num_threads" << endl;
+        return 1;
     }
 
     // k value for the k-nearest neighbors
