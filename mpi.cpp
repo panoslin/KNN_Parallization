@@ -124,6 +124,7 @@ vector<int> KNN(ArffData* train, ArffData* test, int k, int mpi_rank, int mpi_nu
             // Reset class counts
             fill(classCounts.begin(), classCounts.end(), 0);
         }
+        return vector<int>();
     }
 }
 
