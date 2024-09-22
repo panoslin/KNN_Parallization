@@ -79,21 +79,20 @@ vector<int> KNN(ArffData *train, ArffData *test, int k)
         }
     }
 
-    vector<vector<int>> classCounts(test_num_instances, vector<int>(num_classes, 0));
     #pragma omp parallel for
     for (int queryIndex = 0; queryIndex < test_num_instances; queryIndex++) {
-
+        vector<int> classCounts(num_classes, 0);
         // Collect class labels from the k nearest neighbors
         while (!candidates[queryIndex].empty())
         {
             const Candidate &c = candidates[queryIndex].top();
-            classCounts[queryIndex][c.class_label]++;
+            classCounts[c.class_label]++;
             candidates[queryIndex].pop();
         }
 
         // Determine the class with the highest vote
-        int max_class = distance(classCounts[queryIndex].begin(),
-                                 max_element(classCounts[queryIndex].begin(), classCounts[queryIndex].end()));
+        int max_class = distance(classCounts.begin(),
+                                 max_element(classCounts.begin(), classCounts.end()));
 
         predictions[queryIndex] = max_class;
     }
