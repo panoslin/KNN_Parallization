@@ -4,9 +4,12 @@
 #include "libarff/arff_parser.h"
 #include "libarff/arff_data.h"
 #include "mpi.h"
+#include <omp.h>
+
 
 using namespace std;
-
+const int TERMINATE_TAG = 2;
+const int RESULT_TAG = 1;
 // Calculates the distance between two instances
 float distance(const float* instance_A, const float* instance_B, int num_attributes)
 {
@@ -38,19 +41,90 @@ struct CandidateComparator
 // Implements a MPI kNN where for each candidate query an in-place priority queue is maintained to identify the nearest neighbors
 vector<int> KNN(ArffData* train, ArffData* test, int k, int mpi_rank, int mpi_num_processes)
 {
-
     int num_classes = train->num_classes();
     int num_attributes = train->num_attributes();
     int train_num_instances = train->num_instances();
     int test_num_instances = test->num_instances();
 
-    vector<int> predictions(test_num_instances);
 
-    /*************************************************************
-    *** Complete this code and return the array of predictions ***
-    **************************************************************/
+    float* train_matrix = train->get_dataset_matrix();
+    float* test_matrix = test->get_dataset_matrix();
 
-    return predictions;
+    if (mpi_rank == 0) {
+        MPI_Status stat;
+        MPI_Request req;
+        vector<int> predictions(test_num_instances);
+
+        // send queryIndex for each process, excluding master process
+        for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex) {
+            MPI_Send(&queryIndex, 1, MPI_INT, max(queryIndex % mpi_num_processes, 1), 0, MPI_COMM_WORLD);
+        }
+
+        // receive prediction from slave processes
+        int maskClass;
+        for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex) {
+            MPI_Recv(&maskClass, 1, MPI_INT, MPI_ANY_SOURCE, RESULT_TAG, MPI_COMM_WORLD, &stat);
+            predictions[maskClass / num_classes] = maskClass % num_classes;
+        }
+
+        // send termination msg to all slave processes
+        int terminate = -1;
+        for (int rank = 1; rank < mpi_num_processes; rank++) {
+            MPI_Send(&terminate, 1, MPI_INT, rank, TERMINATE_TAG, MPI_COMM_WORLD);
+        }
+        return predictions;
+    }
+    else {
+        // receiveing tasks from rank 0
+        int queryIndex;
+        MPI_Status stat;
+        vector<int> classCounts(num_classes, 0);
+        while (true) {
+            MPI_Recv(&queryIndex, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &stat);
+            if (stat.MPI_TAG == TERMINATE_TAG) {
+                // cout << "Rank " << mpi_rank << " terminating" << endl;
+                break;
+            }
+            // cout << "Rank " << mpi_rank << " receives tasks " << queryIndex << endl;
+            priority_queue<Candidate, vector<Candidate>, CandidateComparator> candidates;
+            for (int keyIndex = 0; keyIndex < train_num_instances; ++keyIndex) {
+                float dist = distance(&test_matrix[queryIndex * num_attributes],
+                    &train_matrix[keyIndex * num_attributes],
+                    num_attributes);
+
+                int class_label = static_cast<int>(
+                    train_matrix[keyIndex * num_attributes + num_attributes - 1]);
+
+                Candidate candidate{ dist, class_label };
+                if (static_cast<int>(candidates.size()) < k) {
+                    // If the heap is not full, push the new candidate
+                    candidates.push(candidate);
+                }
+                else if (dist < candidates.top().distance) {
+                    // If the new candidate is closer than the farthest in the heap
+                    candidates.pop();
+                    candidates.push(candidate);
+                }
+            }
+
+            // Collect class labels from the k nearest neighbors
+            while (!candidates.empty()) {
+                const Candidate& c = candidates.top();
+                classCounts[c.class_label]++;
+                candidates.pop();
+            }
+
+            // Determine the class with the highest vote
+            int max_class = distance(classCounts.begin(),
+                max_element(classCounts.begin(), classCounts.end()));
+
+            int maskClass = queryIndex * num_classes + max_class;
+            MPI_Send(&maskClass, 1, MPI_INT, 0, RESULT_TAG, MPI_COMM_WORLD);
+
+            // Reset class counts
+            fill(classCounts.begin(), classCounts.end(), 0);
+        }
+    }
 }
 
 
@@ -129,7 +203,6 @@ int main(int argc, char* argv[])
             << " ms CPU time for MPI with " << mpi_num_processes
             << " processes Accuracy was " << accuracy << "%" << endl;
     }
-
 
     MPI_Finalize();
 }
