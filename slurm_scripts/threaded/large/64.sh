@@ -3,5 +3,5 @@
 #SBATCH --cpus-per-task 64
 #SBATCH --mem 1G
 #SBATCH --nodes 1
-#SBATCH --output large_64_thread.log
+#SBATCH --output log/threaded_large_64
 ./threaded datasets/large-train.arff datasets/large-test.arff 3 64

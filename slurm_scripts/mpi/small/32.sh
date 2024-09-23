@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --ntasks 32
 #SBATCH --cpus-per-task 1
-#SBATCH --mem 1G
+#SBATCH --mem 2G
 #SBATCH --nodes 1
-#SBATCH --output mpi_small_32.log
+#SBATCH --output log/mpi_small_32.log
 mpirun -np $SLURM_NTASKS mpi datasets/small-train.arff datasets/small-test.arff 3
