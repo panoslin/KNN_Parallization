@@ -7,8 +7,25 @@
 #include <queue>
 #include "libarff/arff_parser.h"
 #include "libarff/arff_data.h"
+#include <cuda_runtime.h>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/pair.h>
+
 
 using namespace std;
+
+
+__global__ void find_knn(
+    float* d_train_matrix,
+    float *d_test_matrix, 
+    int* d_predicitons, 
+    thrust::pair<int, float> *d_knn,
+    int k
+) {
+
+}
+
 
 // Calculates the distance between two instances
 float distance(const float* instance_A, const float* instance_B, int num_attributes) {
@@ -33,7 +50,6 @@ struct CandidateComparator {
     }
 };
 
-// Implements a sequential kNN classifier using a priority queue
 vector<int> KNN(ArffData* train, ArffData* test, int k) {
     int num_classes = train->num_classes();
     int num_attributes = train->num_attributes();
@@ -45,52 +61,52 @@ vector<int> KNN(ArffData* train, ArffData* test, int k) {
     float* train_matrix = train->get_dataset_matrix();
     float* test_matrix = test->get_dataset_matrix();
 
+    // 0. Defined dims
+    // Define a 1D of grid of 1D of block
+    int threadPerBlock = 1024;
+    // assuming the max shared memory space is 24KB (actually it's 48KB, just to be safe)
+    // each shared mem will store pairs of (int, float) representing the (class, distance)
+    int trainInstancePerBlock = 24 * 1024 / 8;
+    int blockPerTestInstance = (train_num_instances + trainInstancePerBlock - 1) / trainInstancePerBlock;
+    int blockPerGrid = blockPerTestInstance * test_num_instances;
+    int trainInstancePerThread = trainInstancePerBlock / threadPerBlock;
+
+    // 1. init mem
+    float* d_train_matrix, *d_test_matrix;
+
+    cudaMalloc(&d_train_matrix, sizeof(float) * num_attributes * train_num_instances);
+    cudaMalloc(&d_test_matrix, sizeof(float) * num_attributes * test_num_instances);
+
+    int* d_predictions;
+    cudaMalloc(&d_predictions, sizeof(int) * test_num_instances);
+
+    // store the knns for each local knn for each block for each test instance
+    // each block will calculate the knn locally and write to this d_knn global memory
+    thrust::pair<int, float> *d_knn;
+    cudaMalloc((void**)&d_knn, test_num_instances * blockPerTestInstance * k * sizeof(thrust::pair<int, float>));
+
+    // 2. Copy to device
+    cudaMemcpy(d_train_matrix, train_matrix, sizeof(float) * num_attributes * train_num_instances, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_test_matrix, test_matrix, sizeof(float) * num_attributes * test_num_instances, cudaMemcpyHostToDevice);
     
-    vector<int> classCounts(num_classes, 0);
+    // Set init value to d_predicitons
+    cudaMemset(d_predictions, 0, sizeof(int) * test_num_instances);
 
-    for (int queryIndex = 0; queryIndex < test_num_instances; ++queryIndex) {
-        // Priority queue to store the k nearest neighbors (max-heap based on distance)
-        priority_queue<Candidate, vector<Candidate>, CandidateComparator> candidates;
+    // 4. Call kernel
+    find_knn<<< blockPerGrid, threadPerBlock>>> (d_train_matrix, d_test_matrix, d_predictions, d_knn, k);
 
-        for (int keyIndex = 0; keyIndex < train_num_instances; ++keyIndex) {
-            float dist = distance(&test_matrix[queryIndex * num_attributes],
-                                  &train_matrix[keyIndex * num_attributes],
-                                  num_attributes);
-
-            int class_label = static_cast<int>(
-                train_matrix[keyIndex * num_attributes + num_attributes - 1]);
-            
-            Candidate candidate{dist, class_label};
-            
-            if (static_cast<int>(candidates.size()) < k) {
-                // If the heap is not full, push the new candidate
-                candidates.push(candidate);
-            } else if (dist < candidates.top().distance) {
-                // If the new candidate is closer than the farthest in the heap
-                candidates.pop();
-                candidates.push(candidate);
-            }
-        }
-
-        // Collect class labels from the k nearest neighbors
-        while (!candidates.empty()) {
-            const Candidate& c = candidates.top();
-            classCounts[c.class_label]++;
-            candidates.pop();
-        }
-
-        // Determine the class with the highest vote
-        int max_class = distance(classCounts.begin(),
-                                 max_element(classCounts.begin(), classCounts.end()));
-
-        predictions[queryIndex] = max_class;
-
-        // Reset class counts
-        fill(classCounts.begin(), classCounts.end(), 0);
-    }
+    // 5. Copy to host
+    cudaMemcpy(predictions.data(), d_predictions, sizeof(int) * test_num_instances, cudaMemcpyDeviceToHost);
+    
+    // 6. Free memory
+    cudaFree(d_train_matrix);
+    cudaFree(d_test_matrix);
+    cudaFree(d_predictions);
+    cudaFree(d_knn);
 
     return predictions;
 }
+
 vector<int> computeConfusionMatrix(const vector<int>& predictions, ArffData* dataset) {
     int num_classes = dataset->num_classes();
     int num_instances = dataset->num_instances();
@@ -130,21 +146,26 @@ int main(int argc, char* argv[]) {
     ArffData* test = parserTest.parse();
 
     // Measure execution time
-    auto start = chrono::steady_clock::now();
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float milliseconds = 0;
+    cudaEventRecord(start);
 
     vector<int> predictions = KNN(train, test, k);
 
-    auto end = chrono::steady_clock::now();
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
 
     // Compute metrics
     vector<int> confusionMatrix = computeConfusionMatrix(predictions, test);
     float accuracy = computeAccuracy(confusionMatrix, test);
 
-    chrono::duration<double, milli> time_difference = end - start;
 
     cout << "The " << k << "-NN classifier for " << test->num_instances()
          << " test instances and " << train->num_instances()
-         << " train instances required " << time_difference.count()
+         << " train instances required " << milliseconds
          << " ms CPU time for single-thread. Accuracy was "
          << accuracy << "%" << endl;
 
