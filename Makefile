@@ -8,6 +8,10 @@ openmp: openmp.cpp
 mpi: mpi.cpp
 	mpicxx -fopenmp -std=c++20 -o mpi mpi.cpp -lmpi -I libarff libarff/arff_attr.cpp libarff/arff_data.cpp libarff/arff_instance.cpp libarff/arff_lexer.cpp libarff/arff_parser.cpp libarff/arff_scanner.cpp libarff/arff_token.cpp libarff/arff_utils.cpp libarff/arff_value.cpp
 cuda: knn_cuda.cu
+	nvcc -std=c++20 knn_cuda.cu -o cuda -I libarff libarff/arff_attr.cpp libarff/arff_data.cpp libarff/arff_instance.cpp libarff/arff_lexer.cpp libarff/arff_parser.cpp libarff/arff_scanner.cpp libarff/arff_token.cpp libarff/arff_utils.cpp libarff/arff_value.cpp
+
+cuda_athena: knn_cuda.cu
 	nvcc -std=c++20 knn_cuda.cu -o cuda --gpu-architecture=compute_90 --gpu-code=sm_90 -I libarff libarff/arff_attr.cpp libarff/arff_data.cpp libarff/arff_instance.cpp libarff/arff_lexer.cpp libarff/arff_parser.cpp libarff/arff_scanner.cpp libarff/arff_token.cpp libarff/arff_utils.cpp libarff/arff_value.cpp
+
 clean:
 	rm serial threaded openmp mpi cuda

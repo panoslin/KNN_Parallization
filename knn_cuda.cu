@@ -8,6 +8,7 @@
 #include "libarff/arff_parser.h"
 #include "libarff/arff_data.h"
 #include <cuda_runtime.h>
+#include <float.h>
 
 
 #define K 3
