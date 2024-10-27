@@ -8,9 +8,6 @@
 #include "libarff/arff_parser.h"
 #include "libarff/arff_data.h"
 #include <cuda_runtime.h>
-#include <thrust/host_vector.h>
-#include <thrust/device_vector.h>
-#include <thrust/pair.h>
 
 
 #define K 3
