@@ -23,10 +23,8 @@ __global__ void find_knn(
     float* d_train_matrix,
     float* d_test_matrix,
     int* d_predictions,
-    int trainInstancePerThread,
     int train_num_instances,
-    int num_attributes,
-    int threadPerBlock
+    int num_attributes
 )
 {
     // 1. each thread reduce 256 trainInstance to 3 knn
@@ -136,7 +134,7 @@ vector<int> KNN(ArffData* train, ArffData* test, int k)
     float* train_matrix = train->get_dataset_matrix();
     float* test_matrix = test->get_dataset_matrix();
 
-    // 0. Defined dims
+    // Defined dims
     // Define a 1D of grid of 1D of block
     int trainInstancePerThread = 256;
     int threadPerBlock = (train_num_instances + trainInstancePerThread - 1) / trainInstancePerThread;
@@ -155,26 +153,21 @@ vector<int> KNN(ArffData* train, ArffData* test, int k)
     cudaMemcpy(d_train_matrix, train_matrix, sizeof(float) * num_attributes * train_num_instances, cudaMemcpyHostToDevice);
     cudaMemcpy(d_test_matrix, test_matrix, sizeof(float) * num_attributes * test_num_instances, cudaMemcpyHostToDevice);
 
-    // Set init value to d_predicitons
-    cudaMemset(d_predictions, 0, sizeof(int) * test_num_instances);
-
-    // 4. Call kernel
+    // 3. Call kernel
     int sharedMemorySize = 2 * threadPerBlock * K * sizeof(float);
     find_knn << < blockPerGrid, threadPerBlock, sharedMemorySize >> > (
         d_train_matrix,
         d_test_matrix,
         d_predictions,
-        trainInstancePerThread,
         train_num_instances,
-        num_attributes,
-        threadPerBlock
+        num_attributes
     );
 
 
-    // 5. Copy to host
+    // 4. Copy to host
     cudaMemcpy(predictions.data(), d_predictions, sizeof(int) * test_num_instances, cudaMemcpyDeviceToHost);
 
-    // 6. Free memory
+    // 5. Free memory
     cudaFree(d_train_matrix);
     cudaFree(d_test_matrix);
     cudaFree(d_predictions);
@@ -244,7 +237,7 @@ int main(int argc, char* argv[])
     cout << "The " << k << "-NN classifier for " << test->num_instances()
         << " test instances and " << train->num_instances()
         << " train instances required " << milliseconds
-        << " ms CPU time for single-thread. Accuracy was "
+        << " ms CPU time for CUDA. Accuracy was "
         << accuracy << "%" << endl;
 
     return 0;
