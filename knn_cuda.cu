@@ -27,7 +27,7 @@ __global__ void find_knn(
     int num_attributes
 )
 {
-    // 1. each thread reduce 256 trainInstance to 3 knn
+    // 1. each thread reduce 256 trainInstance to knn
     float threadLocalKnn[2 * K];
     for (int i = 0; i < 2 * K; i++) {
         threadLocalKnn[i] = FLT_MAX;
@@ -205,11 +205,10 @@ float computeAccuracy(const vector<int>& confusionMatrix, ArffData* dataset)
 
 int main(int argc, char* argv[])
 {
-    if (argc != 4) {
-        cerr << "Usage: ./program datasets/train.arff datasets/test.arff k" << endl;
+    if (argc != 3) {
+        cerr << "Usage: ./program datasets/train.arff datasets/test.arff" << endl;
         return 1;
     }
-    int k = stoi(argv[3]);
 
     ArffParser parserTrain(argv[1]);
     ArffParser parserTest(argv[2]);
@@ -223,7 +222,7 @@ int main(int argc, char* argv[])
     float milliseconds = 0;
     cudaEventRecord(start);
 
-    vector<int> predictions = KNN(train, test, k);
+    vector<int> predictions = KNN(train, test, K);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -233,8 +232,7 @@ int main(int argc, char* argv[])
     vector<int> confusionMatrix = computeConfusionMatrix(predictions, test);
     float accuracy = computeAccuracy(confusionMatrix, test);
 
-
-    cout << "The " << k << "-NN classifier for " << test->num_instances()
+    cout << "The " << K << "-NN classifier for " << test->num_instances()
         << " test instances and " << train->num_instances()
         << " train instances required " << milliseconds
         << " ms CPU time for CUDA. Accuracy was "
